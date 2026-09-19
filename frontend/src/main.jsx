@@ -2460,15 +2460,18 @@ function Auth({ mode, onAuth }) {
       setSuccess("Signed in successfully.");
       navigate("/dashboard");
     } catch (requestError) {
+      const apiUnavailable = !requestError.response;
       const message =
         requestError.response?.data?.error?.message ||
         "Something went wrong. Please try again.";
       setError(
-        signup
-          ? message
-          : message === "Email or password is incorrect"
-            ? "Unable to sign in. Please check your credentials."
-            : "Something went wrong. Please try again.",
+        apiUnavailable
+          ? "Unable to reach the API. Check the deployed backend URL and try again."
+          : signup
+            ? message
+            : message === "Email or password is incorrect"
+              ? "Unable to sign in. Please check your credentials."
+              : message,
       );
     } finally {
       setBusy(false);
