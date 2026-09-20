@@ -1,5 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
+import React, {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal, createRoot } from "react-dom";
 import {
   BrowserRouter,
   Link,
@@ -71,6 +77,27 @@ const readJSON = (key, fallback) => {
 const writeJSON = (key, value) => {
   localStorage.setItem(key, JSON.stringify(value));
 };
+const copyText = async (value) => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+    const field = document.createElement("textarea");
+    field.value = value;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.left = "-9999px";
+    field.style.top = "-9999px";
+    document.body.appendChild(field);
+    field.select();
+    const ok = document.execCommand("copy");
+    field.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+};
 const translations = {
   en: {
     dashboard: "Dashboard",
@@ -118,44 +145,127 @@ const Kicker = ({ children }) => (
     {children}
   </div>
 );
+const BRAND_TAGLINE = "YOUR VOTE. LIVE.";
+function BrandMark() {
+  const gradientId = `pulsevote-logo-gradient-${useId().replace(/:/g, "")}`;
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 96 96" role="img" aria-hidden="true">
+        <defs>
+          <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#6C63FF" />
+            <stop offset="48%" stopColor="#3B82F6" />
+            <stop offset="100%" stopColor="#22D3EE" />
+          </linearGradient>
+        </defs>
+        <circle className="brand-orbit" cx="48" cy="48" r="34" />
+        <path
+          className="brand-p-shape"
+          style={{ fill: `url(#${gradientId})` }}
+          d="M33 18h21.2c12.7 0 22.5 7.8 22.5 19.5S67 57 54.2 57H47v21H33V18zm14 16.5h5.8c5.4 0 9.1-2.9 9.1-7.4 0-4.5-3.6-7.3-9.1-7.3H47v14.7z"
+        />
+        <path
+          className="brand-wave"
+          style={{ stroke: `url(#${gradientId})` }}
+          d="M14 52h11l10-15 12 24 10-20 9 11h18"
+        />
+        <path className="brand-check" d="M48 69l9 9 23-28" />
+      </svg>
+    </span>
+  );
+}
+function usePopoverPosition(anchorRef, popoverRef, open, preferredWidth) {
+  const [position, setPosition] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return undefined;
+    }
+
+    const updatePosition = () => {
+      const anchor = anchorRef.current;
+      const popover = popoverRef.current;
+      if (!anchor) return;
+      const anchorRect = anchor.getBoundingClientRect();
+      const width = popover?.getBoundingClientRect().width || preferredWidth;
+      const gap = 12;
+      const padding = 12;
+      const leftSpace = anchorRect.left - gap - width;
+      const rightSpace = anchorRect.right + gap;
+      const left =
+        leftSpace >= padding || rightSpace + width > window.innerWidth
+          ? Math.max(padding, leftSpace)
+          : Math.min(window.innerWidth - width - padding, rightSpace);
+      const height = popover?.getBoundingClientRect().height || 360;
+      const top = Math.max(
+        padding,
+        Math.min(window.innerHeight - height - padding, anchorRect.top),
+      );
+      setPosition({ left, top });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [anchorRef, popoverRef, open, preferredWidth]);
+
+  return position;
+}
 function Logo() {
   return (
     <Link to="/" className="brand" aria-label="PulseVote home">
-      <span className="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 96 96" role="img">
-          <defs>
-            <linearGradient
-              id="pulsevote-logo-gradient"
-              x1="0%"
-              y1="0%"
-              x2="100%"
-              y2="100%"
-            >
-              <stop offset="0%" stopColor="#6C63FF" />
-              <stop offset="48%" stopColor="#3B82F6" />
-              <stop offset="100%" stopColor="#22D3EE" />
-            </linearGradient>
-          </defs>
-          <circle className="brand-orbit" cx="48" cy="48" r="34" />
-          <path
-            className="brand-p-shape"
-            d="M33 18h21.2c12.7 0 22.5 7.8 22.5 19.5S67 57 54.2 57H47v21H33V18zm14 16.5h5.8c5.4 0 9.1-2.9 9.1-7.4 0-4.5-3.6-7.3-9.1-7.3H47v14.7z"
-          />
-          <path
-            className="brand-wave"
-            d="M14 52h11l10-15 12 24 10-20 9 11h18"
-          />
-          <path className="brand-check" d="M48 69l9 9 23-28" />
-        </svg>
-      </span>
+      <BrandMark />
       <span className="brand-copy">
         <span className="brand-name">
           <span className="brand-pulse">Pulse</span>
           <span className="brand-vote">Vote</span>
         </span>
-        <span className="brand-tagline">YOUR VOICE. LIVE.</span>
+        <span className="brand-tagline">{BRAND_TAGLINE}</span>
       </span>
     </Link>
+  );
+}
+function CopyLinkButton({
+  text,
+  className = "button button-primary",
+  label = "Copy Link",
+  successText = "Link copied!",
+  failureText = "Copy failed",
+  onAfterCopy,
+  icon: Icon = Copy,
+}) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const handleCopy = async () => {
+    const ok = await copyText(text);
+    if (ok) {
+      setCopied(true);
+      setFailed(false);
+      onAfterCopy?.();
+      window.setTimeout(() => setCopied(false), 1600);
+      return;
+    }
+    setCopied(false);
+    window.setTimeout(() => setFailed(false), 1800);
+  };
+
+  return (
+    <button type="button" className={className} onClick={handleCopy}>
+      {copied ? (
+        <Check size={15} />
+      ) : failed ? (
+        <X size={15} />
+      ) : (
+        <Icon size={15} />
+      )}
+      {copied ? successText : failed ? failureText : label}
+    </button>
   );
 }
 function Status({ label = "LIVE" }) {
@@ -167,11 +277,14 @@ function Status({ label = "LIVE" }) {
   );
 }
 function NotificationBell({ user }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [readPulseId, setReadPulseId] = useState(null);
+  const [badgePulse, setBadgePulse] = useState(false);
   const bellRef = useRef(null);
   const token = localStorage.getItem("pulsvote_token");
 
@@ -197,6 +310,8 @@ function NotificationBell({ user }) {
         current.map((item) => ({ ...item, read: true })),
       );
       setUnreadCount(0);
+      setBadgePulse(true);
+      window.setTimeout(() => setBadgePulse(false), 500);
     } catch {
       setError("Unable to update notifications");
     }
@@ -211,6 +326,12 @@ function NotificationBell({ user }) {
         ),
       );
       setUnreadCount((current) => Math.max(0, current - 1));
+      setReadPulseId(id);
+      setBadgePulse(true);
+      window.setTimeout(() => {
+        setReadPulseId(null);
+        setBadgePulse(false);
+      }, 500);
     } catch {
       setError("Unable to update notification");
     }
@@ -279,7 +400,7 @@ function NotificationBell({ user }) {
       >
         <Bell size={16} />
         {unreadCount > 0 && (
-          <span className="notification-badge">{unreadCount}</span>
+          <span className="notification-count">{unreadCount}</span>
         )}
       </button>
       {open && (
@@ -302,18 +423,27 @@ function NotificationBell({ user }) {
             <div className="notification-empty error">{error}</div>
           )}
           {!loading && !error && notifications.length === 0 && (
-            <div className="notification-empty">No notifications yet.</div>
+            <div className="notification-empty">You're all caught up!</div>
           )}
           {!loading && !error && notifications.length > 0 && (
             <ul className="notification-list">
               {notifications.map((item) => (
                 <li
                   key={item.id}
-                  className={`notification-item ${item.read ? "read" : "unread"}`}
+                  className={`notification-item ${item.read ? "read" : "unread"} ${readPulseId === item.id ? "is-animating" : ""}`}
+                  onClick={() => {
+                    if (!item.read) markOneRead(item.id);
+                    if (item.pollId) navigate(`/poll/${item.pollId}`);
+                    setOpen(false);
+                  }}
+                  role={item.pollId ? "button" : undefined}
+                  tabIndex={item.pollId ? 0 : undefined}
                 >
                   <div className="notification-icon">
                     {item.type === "VOTE_RECEIVED" ? (
                       <CheckSquare size={14} />
+                    ) : item.type === "POLL_REMINDER" ? (
+                      <Bell size={14} />
                     ) : item.type.includes("POLL") ? (
                       <CalendarDays size={14} />
                     ) : (
@@ -2950,7 +3080,7 @@ function Dashboard({ user }) {
           <h1>
             WELCOME BACK,
             <br />
-            <em>{user.name?.split(" ")[0] || "Pulse"}.</em>
+            <em>{user.name || "there"}</em>
           </h1>
           <p className="muted">
             Your questions are live. Keep the room moving.
@@ -3297,16 +3427,43 @@ function QrContent({ poll, onDone }) {
     </div>
   );
 }
+function sanitizeExportText(value) {
+  return (
+    String(value || "poll")
+      .normalize("NFKD")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/\s+/g, "_")
+      .slice(0, 28) || "poll"
+  );
+}
 function exportFileName(poll, extension) {
-  const id = String(poll.id || "poll")
+  const id = String(poll?.id || "poll")
     .replace(/[^a-z0-9_-]/gi, "")
     .slice(0, 12);
-  return `PulseVote-${id || "Poll"}-Results.${extension}`;
+  const title = sanitizeExportText(poll?.question || "Poll Results");
+  return `PulseVote_${title}_${id || "Poll"}.${extension}`;
 }
 function exportPercentage(option, poll) {
   return poll.totalVotes
     ? Math.round((option.votes / poll.totalVotes) * 100)
     : 0;
+}
+function triggerDownload(blob, fileName) {
+  if (!(blob instanceof Blob)) {
+    throw new Error("Download payload is not a valid Blob.");
+  }
+  const blobUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = blobUrl;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 function ExportContent({ poll, onDone }) {
   const previewRef = useRef(null);
@@ -3322,31 +3479,47 @@ function ExportContent({ poll, onDone }) {
   const [includeQr, setIncludeQr] = useState(false);
   const url = publicUrl(poll);
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&color=111114&bgcolor=f5f5f5&data=${encodeURIComponent(url)}`;
-  const downloadBlob = (blob, extension) => {
-    const blobUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = exportFileName(poll, extension);
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-  };
+
   const downloadCsv = async () => {
-    const rows = [["Poll Question", "Option", "Votes", "Percentage"]];
-    poll.options.forEach((option) =>
-      rows.push([
-        poll.question,
-        option.text,
-        option.votes,
-        `${exportPercentage(option, poll)}%`,
-      ]),
-    );
-    const csv = rows
-      .map((row) =>
-        row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","),
-      )
-      .join("\r\n");
-    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), "csv");
+    try {
+      const response = await api.get(`/polls/${poll.id}/export`, {
+        responseType: "blob",
+      });
+      const contentType =
+        response.headers?.["content-type"] || "text/csv;charset=utf-8";
+      const payload =
+        response.data instanceof Blob
+          ? response.data
+          : new Blob([response.data || ""], { type: contentType });
+      if (!payload || payload.size === 0) {
+        throw new Error("CSV export response is empty");
+      }
+      triggerDownload(payload, exportFileName(poll, "csv"));
+      return;
+    } catch (apiError) {
+      const rows = [["Poll Question", "Option", "Votes", "Percentage"]];
+      poll.options.forEach((option) =>
+        rows.push([
+          poll.question,
+          option.text,
+          option.votes,
+          `${exportPercentage(option, poll)}%`,
+        ]),
+      );
+      const csv = rows
+        .map((row) =>
+          row
+            .map((value) => `"${String(value).replace(/"/g, '""')}"`)
+            .join(","),
+        )
+        .join("\r\n");
+      triggerDownload(
+        new Blob([csv], { type: "text/csv;charset=utf-8" }),
+        exportFileName(poll, "csv"),
+      );
+    }
   };
+
   const downloadXlsx = () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
@@ -3381,43 +3554,71 @@ function ExportContent({ poll, onDone }) {
       ]),
       "Analytics",
     );
-    XLSX.writeFile(workbook, exportFileName(poll, "xlsx"));
+    const buffer = XLSX.write(workbook, {
+      bookType: "xlsx",
+      type: "array",
+    });
+    triggerDownload(
+      new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+      }),
+      exportFileName(poll, "xlsx"),
+    );
   };
+
   const downloadVisual = async () => {
-    if (!previewRef.current) throw new Error("Export preview is unavailable");
+    if (!previewRef.current) {
+      throw new Error("Export preview is unavailable");
+    }
+
     const canvas = await html2canvas(previewRef.current, {
       backgroundColor: "#f1f0eb",
       scale: 2,
       useCORS: true,
+      logging: false,
     });
+
     if (format === "PDF") {
       const pdf = new jsPDF({ unit: "pt", format: "a4" });
-      const width = pdf.internal.pageSize.getWidth() - 56;
-      const imageHeight = (canvas.height * width) / canvas.width;
+      const pageWidth = pdf.internal.pageSize.getWidth() - 56;
+      const pageHeight = pdf.internal.pageSize.getHeight() - 56;
+      const imageWidth = pageWidth;
+      const imageHeight = (canvas.height * pageWidth) / canvas.width;
       const image = canvas.toDataURL("image/png");
-      let offset = 0;
-      while (offset < imageHeight) {
-        if (offset) pdf.addPage();
-        pdf.addImage(image, "PNG", 28, 28 - offset, width, imageHeight);
-        offset += pdf.internal.pageSize.getHeight() - 56;
+      for (let offset = 0; offset < imageHeight; offset += pageHeight) {
+        if (offset > 0) pdf.addPage();
+        pdf.addImage(image, "PNG", 28, 28 - offset, imageWidth, imageHeight);
       }
-      pdf.save(exportFileName(poll, "pdf"));
+      const blob = pdf.output("blob");
+      triggerDownload(blob, exportFileName(poll, "pdf"));
       return;
     }
+
     const image = canvas.toDataURL(
       format === "JPG" ? "image/jpeg" : "image/png",
       0.95,
     );
     const response = await fetch(image);
-    downloadBlob(await response.blob(), format.toLowerCase());
+    const blob = await response.blob();
+    if (!blob || blob.size === 0) {
+      throw new Error("Rendered export image is empty");
+    }
+
+    triggerDownload(blob, exportFileName(poll, format.toLowerCase()));
   };
+
   const download = async () => {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
-      if (format === "CSV") await downloadCsv();
-      else if (format === "XLSX") downloadXlsx();
-      else await downloadVisual();
+      if (format === "CSV") {
+        await downloadCsv();
+      } else if (format === "XLSX") {
+        downloadXlsx();
+      } else {
+        await downloadVisual();
+      }
       onDone("Download complete ✓");
     } catch (cause) {
       console.error("PulseVote export failed", cause);
@@ -3426,6 +3627,7 @@ function ExportContent({ poll, onDone }) {
       setBusy(false);
     }
   };
+
   return (
     <div className="export-content">
       <div className="export-layout">
@@ -3434,14 +3636,20 @@ function ExportContent({ poll, onDone }) {
           <div className="export-preview" ref={previewRef}>
             {includeBranding && (
               <div className="export-brand">
-                PULSE<span>VOTE</span>
+                <BrandMark />
+                <span>
+                  PULSE<span>VOTE</span>
+                </span>
               </div>
             )}
             <h3>PulseVote Poll Results</h3>
             <h4>{poll.question}</h4>
+            {poll.description && (
+              <p className="export-description">{poll.description}</p>
+            )}
             <div className="export-meta">
               <span>{poll.totalVotes} total votes</span>
-              <span>{poll.status || "ACTIVE"}</span>
+              <span>{poll.status || "ACTIVE"} status</span>
               <span>
                 {poll.createdAt ? dateLabel(poll.createdAt) : "Just now"}
               </span>
@@ -3513,7 +3721,7 @@ function ExportContent({ poll, onDone }) {
           </div>
         </div>
         <div className="export-controls">
-          <span className="panel-label">CHOOSE FORMAT</span>
+          <span className="panel-label">DOWNLOAD POLL</span>
           <div className="export-formats">
             {["PDF", "PNG", "JPG", "CSV", "XLSX"].map((value) => (
               <button
@@ -4234,6 +4442,7 @@ function AdvancedPollSettings({ value, onChange }) {
 }
 function CalendarPopover({ value, onChange, onClose, anchorRef }) {
   const calendarRef = useRef(null);
+  const position = usePopoverPosition(anchorRef, calendarRef, true, 340);
   const selected = value ? new Date(`${value}T00:00:00`) : null;
   const [month, setMonth] = useState(
     selected || new Date(new Date().getFullYear(), new Date().getMonth(), 1),
@@ -4278,10 +4487,11 @@ function CalendarPopover({ value, onChange, onClose, anchorRef }) {
       document.removeEventListener("mousedown", closeOnOutsideClick);
     };
   }, [onClose]);
-  return (
+  return createPortal(
     <div
       ref={calendarRef}
       className="calendar-popover"
+      style={position ? { left: position.left, top: position.top } : undefined}
       role="dialog"
       aria-label="Select poll date"
     >
@@ -4347,12 +4557,137 @@ function CalendarPopover({ value, onChange, onClose, anchorRef }) {
           );
         })}
       </div>
+    </div>,
+    document.body,
+  );
+}
+function AnalogClockPicker({
+  phase,
+  hour,
+  minute,
+  period,
+  onPhaseChange,
+  onHourChange,
+  onMinuteChange,
+  onPeriodChange,
+  onCancel,
+  onApply,
+}) {
+  const isHourPhase = phase === "hour";
+  const values = isHourPhase
+    ? [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    : [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+  const selectedValue = isHourPhase ? Number(hour) || 12 : Number(minute) || 0;
+  const selectedIndex = isHourPhase
+    ? values.indexOf(selectedValue)
+    : values.indexOf(selectedValue - (selectedValue % 5));
+  const handAngle = (Math.max(0, selectedIndex) / 12) * 360;
+
+  return (
+    <div className="analog-clock-picker">
+      <div className="clock-digital" aria-label="Selected schedule time">
+        <button
+          type="button"
+          className={phase === "hour" ? "active" : ""}
+          onClick={() => onPhaseChange("hour")}
+          aria-label="Choose hour"
+        >
+          {String(hour || 12).padStart(2, "0")}
+        </button>
+        <span>:</span>
+        <button
+          type="button"
+          className={phase === "minute" ? "active" : ""}
+          onClick={() => onPhaseChange("minute")}
+          aria-label="Choose minute"
+        >
+          {minute ? String(minute).padStart(2, "0") : "--"}
+        </button>
+        <button
+          type="button"
+          className={`clock-period ${phase === "ampm" ? "active" : ""}`}
+          onClick={() => onPhaseChange("ampm")}
+          aria-label="Choose AM or PM"
+        >
+          {period}
+        </button>
+      </div>
+      <div className="clock-mode-label">
+        {isHourPhase
+          ? "Choose hour"
+          : phase === "minute"
+            ? "Choose minute"
+            : "Choose period"}
+      </div>
+      <div className="clock-shell">
+        <div
+          className={`clock-face ${isHourPhase ? "hour-face" : "minute-face"}`}
+        >
+          <div
+            className={`clock-hand ${isHourPhase ? "hour-hand" : "minute-hand"}`}
+            style={{ transform: `translateX(-50%) rotate(${handAngle}deg)` }}
+            aria-hidden="true"
+          />
+          {values.map((value, index) => {
+            const angle = (index / 12) * Math.PI * 2;
+            const radius = 41;
+            const x = 50 + Math.sin(angle) * radius;
+            const y = 50 - Math.cos(angle) * radius;
+            const selected = value === selectedValue;
+            return (
+              <button
+                type="button"
+                key={value}
+                className={`clock-number ${selected ? "selected" : ""}`}
+                style={{ left: `${x}%`, top: `${y}%` }}
+                onClick={() =>
+                  isHourPhase
+                    ? (onHourChange(String(value)), onPhaseChange("minute"))
+                    : (onMinuteChange(String(value).padStart(2, "0")),
+                      onPhaseChange("ampm"))
+                }
+                aria-label={`${isHourPhase ? "Hour" : "Minute"} ${String(value).padStart(2, "0")}`}
+                aria-pressed={selected}
+              >
+                {isHourPhase ? value : String(value).padStart(2, "0")}
+              </button>
+            );
+          })}
+          <div className="clock-center" aria-hidden="true" />
+        </div>
+      </div>
+      <div className="ampm-picker" aria-label="Choose AM or PM">
+        {["AM", "PM"].map((value) => (
+          <button
+            type="button"
+            key={value}
+            className={`ampm-option ${period === value ? "selected" : ""}`}
+            onClick={() => onPeriodChange(value)}
+            aria-pressed={period === value}
+          >
+            {value}
+          </button>
+        ))}
+      </div>
+      <div className="clock-actions">
+        <button
+          type="button"
+          className="button button-outline"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+        <button type="button" className="button button-red" onClick={onApply}>
+          Apply
+        </button>
+      </div>
     </div>
   );
 }
 function Create() {
   const [question, setQuestion] = useState("");
-  const [options, setOptions] = useState(["", ""]);
+  const [options, setOptions] = useState(["1", "2", "3", "4", "5"]);
+  const [pollType, setPollType] = useState("RATING");
   const [description, setDescription] = useState("");
   const [votingMode, setVotingMode] = useState("ANONYMOUS");
   const [choiceType, setChoiceType] = useState("SINGLE");
@@ -4362,10 +4697,18 @@ function Create() {
   const [expiryMinute, setExpiryMinute] = useState("30");
   const [expiryPeriod, setExpiryPeriod] = useState("PM");
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
-  const [scheduleStartDate, setScheduleStartDate] = useState("");
-  const [scheduleStartTime, setScheduleStartTime] = useState("09:00");
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const [clockPhase, setClockPhase] = useState("hour");
   const calendarTriggerRef = useRef(null);
+  const timePickerRef = useRef(null);
+  const timePopoverRef = useRef(null);
+  const timePickerPosition = usePopoverPosition(
+    timePickerRef,
+    timePopoverRef,
+    timePickerOpen,
+    330,
+  );
   const [scheduleError, setScheduleError] = useState("");
   const [allowVoteChange, setAllowVoteChange] = useState(false);
   const [advanced, setAdvanced] = useState({
@@ -4379,10 +4722,12 @@ function Create() {
   const [templates, setTemplates] = useState([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [submitPulse, setSubmitPulse] = useState(false);
   const [optionError, setOptionError] = useState("");
   const navigate = useNavigate();
+  const expiryHourNumber = Number(expiryHour) || 12;
   const expiryHour24 = String(
-    (Number(expiryHour) % 12) + (expiryPeriod === "PM" ? 12 : 0),
+    (expiryHourNumber % 12) + (expiryPeriod === "PM" ? 12 : 0),
   ).padStart(2, "0");
   const expiryValue = expiryDate
     ? new Date(`${expiryDate}T${expiryHour24}:${expiryMinute}:00`)
@@ -4393,32 +4738,44 @@ function Create() {
       : null;
   const hourError =
     expiryHour !== "" && (Number(expiryHour) < 1 || Number(expiryHour) > 12)
-      ? "Hour must be between 1 and 12."
+      ? "Hour must be between 01 and 12."
       : "";
   const minuteError =
     expiryMinute !== "" &&
-    (Number(expiryMinute) < 1 || Number(expiryMinute) > 59)
-      ? "Minute must be between 1 and 59."
+    (Number(expiryMinute) < 0 || Number(expiryMinute) > 59)
+      ? "Minute must be between 00 and 59."
       : "";
-  const scheduleStartValue = scheduleStartDate
-    ? new Date(`${scheduleStartDate}T${scheduleStartTime || "00:00"}:00`)
-    : null;
   const validSchedule = Boolean(
     scheduleEnabled &&
-    scheduleStartDate &&
     expiryDate &&
-    expiryIso &&
-    scheduleStartValue &&
-    !Number.isNaN(scheduleStartValue.getTime()) &&
+    expiryHour &&
+    expiryMinute &&
+    expiryPeriod &&
     !hourError &&
     !minuteError &&
-    scheduleStartValue > new Date() &&
-    expiryValue > scheduleStartValue,
+    expiryValue &&
+    !Number.isNaN(expiryValue.getTime()) &&
+    expiryValue > new Date(),
   );
-  const scheduleStartIso =
-    scheduleStartValue && !Number.isNaN(scheduleStartValue.getTime())
-      ? scheduleStartValue.toISOString()
-      : null;
+  const timeLabel =
+    expiryHour && expiryMinute
+      ? `${String(expiryHour).padStart(2, "0")}:${String(expiryMinute).padStart(2, "0")} ${expiryPeriod}`
+      : "Select Time";
+  const hourNumbers = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event) => {
+      if (
+        timePickerRef.current &&
+        !timePickerRef.current.contains(event.target) &&
+        !timePopoverRef.current?.contains(event.target)
+      ) {
+        setTimePickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, []);
   const choiceTypeOptions = [
     {
       value: "SINGLE",
@@ -4484,7 +4841,7 @@ function Create() {
     setScheduleError("");
     setOptionError("");
     if (scheduleEnabled && !validSchedule) {
-      setScheduleError("Choose a future start and an end after the start.");
+      setScheduleError("Choose a valid closing date and time in the future.");
       setBusy(false);
       return;
     }
@@ -4498,12 +4855,13 @@ function Create() {
       const payload = {
         question,
         options: optionValidation.values,
+        pollType,
         description,
         votingMode,
         choiceType,
         maxSelections: choiceType === "MULTIPLE" ? maxSelections : 0,
         expiresAt: scheduleEnabled ? expiryIso : null,
-        startAt: scheduleEnabled ? scheduleStartIso : null,
+        startAt: scheduleEnabled ? new Date().toISOString() : null,
         endAt: scheduleEnabled ? expiryIso : null,
         allowVoteChange,
         responseLimit: advanced.responseLimit,
@@ -4513,7 +4871,8 @@ function Create() {
         thankYou: advanced.thankYou,
       };
       await api.post("/polls", payload);
-      navigate("/dashboard");
+      setSubmitPulse(true);
+      window.setTimeout(() => navigate("/dashboard"), 320);
     } catch (e) {
       setError(e.response?.data?.error?.message || "Unable to create poll");
     } finally {
@@ -4550,42 +4909,99 @@ function Create() {
             <div>
               <span className="panel-label">START FROM TEMPLATE</span>
               <h2>Choose a starting signal</h2>
-              <p>Pre-fill the room with a proven question shape.</p>
+              <p>
+                {pollType === "RATING"
+                  ? "Set up a clear five-point rating scale."
+                  : pollType === "EMOJI"
+                    ? "Choose a small set of reactions for your audience."
+                    : "Pre-fill the room with a proven question shape."}
+              </p>
             </div>
           </div>
-          <div className="template-grid">
-            <button
-              type="button"
-              className="template-card template-blank"
-              onClick={() => {
-                setQuestion("");
-                setOptions(["", ""]);
-              }}
-            >
-              <span className="template-icon">
-                <Plus size={17} />
-              </span>
-              <strong>Blank poll</strong>
-              <small>Start from zero</small>
-            </button>
-            {templates.map((template, index) => (
+          {pollType === "RATING" && (
+            <div className="signal-config signal-config-rating">
+              <span className="signal-config-label">RATING SCALE</span>
+              <div
+                className="rating-config"
+                aria-label="Five point rating scale"
+              >
+                {options.map((option) => (
+                  <button
+                    type="button"
+                    key={option}
+                    aria-label={`${option} stars`}
+                    className="rating-config-star"
+                  >
+                    <Star size={24} fill="currentColor" />
+                    <strong>{option}</strong>
+                  </button>
+                ))}
+              </div>
+              <small>Responses will be recorded from 1 to 5 stars.</small>
+            </div>
+          )}
+          {pollType === "EMOJI" && (
+            <div className="signal-config signal-config-emoji">
+              <span className="signal-config-label">REACTION SET</span>
+              <div className="emoji-config" aria-label="Emoji reaction set">
+                {options.map((option, index) => (
+                  <label key={`${option}-${index}`}>
+                    <span>{option}</span>
+                    <input
+                      value={option}
+                      maxLength={2}
+                      aria-label={`Reaction ${index + 1}`}
+                      onChange={(event) => {
+                        const next = [...options];
+                        next[index] = event.target.value;
+                        setOptions(next);
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+              <small>
+                Use five clear reactions to keep results easy to scan.
+              </small>
+            </div>
+          )}
+          {pollType === "NORMAL" && (
+            <div className="template-grid">
               <button
                 type="button"
-                className={`template-card template-tone-${index % 4}`}
-                key={template.id}
+                className="template-card template-blank"
                 onClick={() => {
-                  setQuestion(template.question);
-                  setOptions(template.options);
+                  setQuestion("");
+                  setPollType("RATING");
+                  setOptions(["1", "2", "3", "4", "5"]);
                 }}
               >
                 <span className="template-icon">
-                  <Hash size={16} />
+                  <Plus size={17} />
                 </span>
-                <strong>{template.name}</strong>
-                <small>{template.options.length} ready-made choices</small>
+                <strong>Blank poll</strong>
+                <small>Start from zero</small>
               </button>
-            ))}
-          </div>
+              {templates.map((template, index) => (
+                <button
+                  type="button"
+                  className={`template-card template-tone-${index % 4}`}
+                  key={template.id}
+                  onClick={() => {
+                    setQuestion(template.question);
+                    setOptions(template.options);
+                    setPollType("NORMAL");
+                  }}
+                >
+                  <span className="template-icon">
+                    <Hash size={16} />
+                  </span>
+                  <strong>{template.name}</strong>
+                  <small>{template.options.length} ready-made choices</small>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="question-panel">
           <div className="form-heading">
@@ -4624,6 +5040,55 @@ function Create() {
             <p>Give the room something worth choosing.</p>
           </div>
           <b>{options.length} / 10</b>
+        </div>
+        <div className="poll-type-selector">
+          <span className="setting-label">POLL TYPE</span>
+          <div
+            className="poll-type-cards"
+            role="radiogroup"
+            aria-label="Poll type"
+          >
+            {[
+              {
+                value: "RATING",
+                title: "Rating",
+                description: "Rate from 1 to 5.",
+                icon: Star,
+              },
+              {
+                value: "EMOJI",
+                title: "Emoji",
+                description: "React with a feeling.",
+                icon: Sparkles,
+              },
+              {
+                value: "NORMAL",
+                title: "Options",
+                description: "Choose from a list.",
+                icon: Circle,
+              },
+            ].map(({ value, title, description, icon: Icon }) => (
+              <button
+                type="button"
+                key={value}
+                className={`poll-type-card ${pollType === value ? "selected" : ""}`}
+                onClick={() => {
+                  setPollType(value);
+                  if (value === "RATING") setOptions(["1", "2", "3", "4", "5"]);
+                  if (value === "EMOJI")
+                    setOptions(["😡", "😕", "😐", "🙂", "😍"]);
+                  if (value === "NORMAL") setOptions(["", ""]);
+                }}
+                aria-pressed={pollType === value}
+              >
+                <span className="choice-type-icon">
+                  <Icon size={17} />
+                </span>
+                <strong>{title}</strong>
+                <small>{description}</small>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="poll-settings choice-settings">
           <label className="setting-field">
@@ -4726,35 +5191,15 @@ function Create() {
             </div>
             {scheduleEnabled && (
               <label className="setting-field">
-                START DATE
-                <input
-                  type="date"
-                  value={scheduleStartDate}
-                  onChange={(event) => setScheduleStartDate(event.target.value)}
-                  min={new Date().toISOString().slice(0, 10)}
-                  aria-label="Schedule start date"
-                />
-              </label>
-            )}
-            {scheduleEnabled && (
-              <label className="setting-field">
-                START TIME
-                <input
-                  type="time"
-                  value={scheduleStartTime}
-                  onChange={(event) => setScheduleStartTime(event.target.value)}
-                  aria-label="Schedule start time"
-                />
-              </label>
-            )}
-            {scheduleEnabled && (
-              <label className="setting-field">
                 SELECT DATE
                 <button
                   type="button"
                   className="date-picker-trigger"
                   ref={calendarTriggerRef}
-                  onClick={() => setCalendarOpen((current) => !current)}
+                  onClick={() => {
+                    setCalendarOpen((current) => !current);
+                    setTimePickerOpen(false);
+                  }}
                   aria-expanded={calendarOpen}
                   aria-haspopup="dialog"
                 >
@@ -4762,14 +5207,17 @@ function Create() {
                   {expiryDate
                     ? new Date(`${expiryDate}T00:00:00`).toLocaleDateString(
                         undefined,
-                        { month: "long", day: "numeric", year: "numeric" },
+                        { month: "short", day: "numeric", year: "numeric" },
                       )
                     : "Select Date"}
                 </button>
                 {calendarOpen && (
                   <CalendarPopover
                     value={expiryDate}
-                    onChange={setExpiryDate}
+                    onChange={(nextDate) => {
+                      setExpiryDate(nextDate);
+                      setCalendarOpen(false);
+                    }}
                     onClose={() => setCalendarOpen(false)}
                     anchorRef={calendarTriggerRef}
                   />
@@ -4777,60 +5225,79 @@ function Create() {
               </label>
             )}
             {scheduleEnabled && (
-              <div className="setting-field">
+              <div className="setting-field" ref={timePickerRef}>
                 TIME
-                <div className="time-fields" aria-label="Select time">
-                  <label>
-                    HOUR
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength="2"
-                      placeholder="HH"
-                      value={expiryHour}
-                      onChange={(e) => {
-                        if (/^\d*$/.test(e.target.value))
-                          setExpiryHour(e.target.value);
-                      }}
-                      aria-label="Hour"
-                    />
-                    {hourError && (
-                      <small className="field-error">{hourError}</small>
-                    )}
-                  </label>
-                  <span>:</span>
-                  <label>
-                    MINUTE
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      maxLength="2"
-                      placeholder="MM"
-                      value={expiryMinute}
-                      onChange={(e) => {
-                        if (/^\d*$/.test(e.target.value))
-                          setExpiryMinute(e.target.value);
-                      }}
-                      aria-label="Minute"
-                    />
-                    {minuteError && (
-                      <small className="field-error">{minuteError}</small>
-                    )}
-                  </label>
-                  <label>
-                    AM / PM
-                    <select
-                      value={expiryPeriod}
-                      onChange={(e) => setExpiryPeriod(e.target.value)}
+                <button
+                  type="button"
+                  className="time-picker-trigger"
+                  onClick={() => {
+                    setTimePickerOpen((current) => !current);
+                    setCalendarOpen(false);
+                    setClockPhase("hour");
+                  }}
+                  aria-expanded={timePickerOpen}
+                  aria-haspopup="dialog"
+                >
+                  <span aria-hidden="true">🕒</span>
+                  {expiryHour && expiryMinute ? timeLabel : "Select Time"}
+                </button>
+                {timePickerOpen &&
+                  createPortal(
+                    <div
+                      ref={timePopoverRef}
+                      className="time-picker-popover"
+                      role="dialog"
+                      aria-label="Select time"
+                      style={
+                        timePickerPosition
+                          ? {
+                              left: timePickerPosition.left,
+                              top: timePickerPosition.top,
+                            }
+                          : undefined
+                      }
                     >
-                      {["AM", "PM"].map((value) => (
-                        <option key={value}>{value}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+                      <div className="time-picker-header">
+                        <strong>SELECT TIME</strong>
+                        <button
+                          type="button"
+                          className="calendar-close"
+                          onClick={() => setTimePickerOpen(false)}
+                          aria-label="Close clock picker"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <AnalogClockPicker
+                        phase={clockPhase}
+                        hour={expiryHour}
+                        minute={expiryMinute}
+                        period={expiryPeriod}
+                        onPhaseChange={setClockPhase}
+                        onHourChange={(value) => {
+                          setExpiryHour(value);
+                          setExpiryMinute("");
+                        }}
+                        onMinuteChange={setExpiryMinute}
+                        onPeriodChange={setExpiryPeriod}
+                        onCancel={() => {
+                          setTimePickerOpen(false);
+                          setClockPhase("hour");
+                        }}
+                        onApply={() => {
+                          setTimePickerOpen(false);
+                          setClockPhase("hour");
+                        }}
+                      />
+                    </div>,
+                    document.body,
+                  )}
+                {hourError && (
+                  <small className="field-error">{hourError}</small>
+                )}
+                {minuteError && (
+                  <small className="field-error">{minuteError}</small>
+                )}
               </div>
             )}
             {scheduleError && (
@@ -4859,46 +5326,50 @@ function Create() {
             </span>
           </label>
         </div>
-        <div className="options-list choice-options">
-          {options.map((option, i) => (
-            <div
-              className="option-input choice-option"
-              key={`${i}-${option || "empty"}`}
-            >
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <input
-                required
-                value={option}
-                onChange={(e) => {
-                  const next = [...options];
-                  next[i] = e.target.value;
-                  setOptions(next);
-                  if (optionError) setOptionError("");
-                }}
-                placeholder={`Option ${i + 1}`}
-                aria-label={`Option ${i + 1}`}
-              />
-              {options.length > 2 && (
-                <button
-                  type="button"
-                  className="remove"
-                  onClick={() => removeOption(i)}
-                  aria-label={`Remove option ${i + 1}`}
-                >
-                  <X size={16} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-        <button
-          type="button"
-          className="button button-outline choice-add-option"
-          onClick={addOption}
-          disabled={options.length >= 10}
-        >
-          <Plus size={16} /> Add Option
-        </button>
+        {pollType === "NORMAL" && (
+          <div className="options-list choice-options">
+            {options.map((option, i) => (
+              <div
+                className="option-input choice-option"
+                key={`${i}-${option || "empty"}`}
+              >
+                <span>{String(i + 1).padStart(2, "0")}</span>
+                <input
+                  required
+                  value={option}
+                  onChange={(e) => {
+                    const next = [...options];
+                    next[i] = e.target.value;
+                    setOptions(next);
+                    if (optionError) setOptionError("");
+                  }}
+                  placeholder={`Option ${i + 1}`}
+                  aria-label={`Option ${i + 1}`}
+                />
+                {options.length > 2 && (
+                  <button
+                    type="button"
+                    className="remove"
+                    onClick={() => removeOption(i)}
+                    aria-label={`Remove option ${i + 1}`}
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {pollType === "NORMAL" && (
+          <button
+            type="button"
+            className="button button-outline choice-add-option"
+            onClick={addOption}
+            disabled={options.length >= 10}
+          >
+            <Plus size={16} /> Add Option
+          </button>
+        )}
         {optionError && (
           <div className="error inline-error">
             <X size={15} /> {optionError}
@@ -4911,8 +5382,15 @@ function Create() {
             {error}
           </div>
         )}
-        <button className="button button-red full" disabled={busy}>
-          {busy ? "Launching signal..." : "Launch poll"}
+        <button
+          className={`button button-red full ${submitPulse ? "is-success" : ""}`}
+          disabled={busy || submitPulse}
+        >
+          {busy
+            ? "Launching signal..."
+            : submitPulse
+              ? "Poll live"
+              : "Launch poll"}
           <Radio size={17} />
         </button>
       </form>
@@ -4924,6 +5402,7 @@ function EditPoll() {
   const navigate = useNavigate();
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState([]);
+  const [pollType, setPollType] = useState("NORMAL");
   const [choiceType, setChoiceType] = useState("SINGLE");
   const [maxSelections, setMaxSelections] = useState(0);
   const [allowVoteChange, setAllowVoteChange] = useState(false);
@@ -4947,6 +5426,7 @@ function EditPoll() {
         const poll = r.data.data;
         setQuestion(poll.question);
         setOptions(poll.options.map((option) => option.text));
+        setPollType(poll.pollType || "NORMAL");
         setChoiceType(poll.choiceType || "SINGLE");
         setMaxSelections(
           poll.maxSelections || (poll.choiceType === "EXACTLY_TWO" ? 2 : 0),
@@ -4996,6 +5476,7 @@ function EditPoll() {
       await api.put(`/polls/${id}`, {
         question,
         options,
+        pollType,
         choiceType,
         maxSelections:
           choiceType === "MULTIPLE"
@@ -5037,6 +5518,54 @@ function EditPoll() {
         </p>
       </div>
       <form className="create-form poll-form" onSubmit={submit}>
+        <div className="choice-type-editor">
+          <span>POLL TYPE</span>
+          <div
+            className="choice-type-segment"
+            role="radiogroup"
+            aria-label="Poll type"
+          >
+            {[
+              {
+                value: "RATING",
+                title: "Rating",
+                description: "Rate from 1 to 5.",
+                icon: Star,
+              },
+              {
+                value: "EMOJI",
+                title: "Emoji",
+                description: "React with a feeling.",
+                icon: Sparkles,
+              },
+              {
+                value: "NORMAL",
+                title: "Options",
+                description: "Choose from a list.",
+                icon: Circle,
+              },
+            ].map(({ value, title, description, icon: Icon }) => (
+              <button
+                key={value}
+                type="button"
+                className={`choice-type-option ${pollType === value ? "selected" : ""}`}
+                onClick={() => {
+                  setPollType(value);
+                  if (value === "RATING") setOptions(["1", "2", "3", "4", "5"]);
+                  if (value === "EMOJI")
+                    setOptions(["😡", "😕", "😐", "🙂", "😍"]);
+                }}
+                aria-pressed={pollType === value}
+              >
+                <span className="choice-type-icon">
+                  <Icon size={16} />
+                </span>
+                <strong>{title}</strong>
+                <small>{description}</small>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="choice-type-editor">
           <span>CHOICE TYPE</span>
           <div
@@ -5197,6 +5726,8 @@ function EditPoll() {
 function ResultAnalytics({ poll }) {
   const [chartType, setChartType] = useState("bar");
   const total = poll.totalVotes || 0;
+  const pollType = poll.pollType || "NORMAL";
+  const isRating = pollType === "RATING";
   const palette = ["#78a8ff", "#e5b95c", "#6ad0bc", "#a9a6f8", "#9aaabd"];
   const results = poll.options.map((option, index) => ({
     ...option,
@@ -5218,14 +5749,27 @@ function ResultAnalytics({ poll }) {
       { parts: [], end: 0 },
     )
     .parts.join(", ");
+  const averageRating =
+    isRating && total
+      ? poll.options.reduce(
+          (sum, option) => sum + Number(option.text || 0) * option.votes,
+          0,
+        ) / total
+      : 0;
 
   return (
     <section className="results-dashboard" aria-labelledby="results-heading">
       <div className="results-dashboard-heading">
         <div>
-          <Kicker>RESULTS / LIVE ANALYTICS</Kicker>
+          <Kicker>
+            RESULTS / {poll.status === "EXPIRED" ? "FINAL" : "LIVE ANALYTICS"}
+          </Kicker>
           <h2 id="results-heading">Poll results</h2>
-          <p>Live vote data, updated as responses arrive.</p>
+          <p>
+            {poll.status === "EXPIRED"
+              ? "Final results."
+              : "Live results, updated as responses arrive."}
+          </p>
         </div>
         <div className="results-stat-grid">
           <div className="results-stat">
@@ -5238,13 +5782,30 @@ function ResultAnalytics({ poll }) {
           </div>
           <div className="results-stat">
             <small>Leading option</small>
-            <strong>{leader?.text || "No votes yet"}</strong>
+            <strong>
+              {isRating && total
+                ? `${averageRating.toFixed(1)} / 5`
+                : leader?.text || "No votes yet"}
+            </strong>
             <span>
               {leader && total ? `${Math.round(leader.percent)}%` : ""}
             </span>
           </div>
         </div>
       </div>
+      {isRating && total > 0 && (
+        <div
+          className="rating-summary"
+          aria-label={`Average rating ${averageRating.toFixed(1)} out of 5`}
+        >
+          <span>Average rating</span>
+          <strong>
+            {"★".repeat(Math.round(averageRating))}
+            {"☆".repeat(5 - Math.round(averageRating))}
+          </strong>
+          <em>{averageRating.toFixed(1)} / 5</em>
+        </div>
+      )}
       <div
         className="chart-selector"
         role="tablist"
@@ -5290,7 +5851,7 @@ function ResultAnalytics({ poll }) {
               {results.map((option) => (
                 <div className="results-bar-row" key={option.id}>
                   <div>
-                    <span>{option.text}</span>
+                    <span>{isRating ? `${option.text} ★` : option.text}</span>
                     <strong>{Math.round(option.percent)}%</strong>
                   </div>
                   <i>
@@ -5366,11 +5927,18 @@ function PublicPoll() {
     isDemo ? "connected" : "connecting",
   );
   const [updated, setUpdated] = useState(false);
+  const [voteSuccess, setVoteSuccess] = useState(false);
   const [share, setShare] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState({
+    visible: false,
+    error: false,
+  });
   const [hasVoted, setHasVoted] = useState(() =>
     Boolean(localStorage.getItem(`pulsvote_vote_${id}`)),
   );
   const [changingVote, setChangingVote] = useState(false);
+  const [reminder, setReminder] = useState(null);
+  const [reminderBusy, setReminderBusy] = useState(false);
   useEffect(() => {
     setHasVoted(Boolean(localStorage.getItem(`pulsvote_vote_${id}`)));
     setChangingVote(false);
@@ -5383,6 +5951,12 @@ function PublicPoll() {
       .get(`/polls/${id}`)
       .then((r) => setPoll(r.data.data))
       .catch(() => setMessage("This poll could not be found."));
+    if (localStorage.getItem("pulsvote_token")) {
+      api
+        .get(`/polls/${id}/reminder`)
+        .then((r) => setReminder(r.data.data || null))
+        .catch(() => setReminder(null));
+    }
     const source = new EventSource(`${API_URL}/polls/${id}/stream`);
     source.onopen = () => setConnection("connected");
     source.onerror = () => setConnection("disconnected");
@@ -5447,6 +6021,8 @@ function PublicPoll() {
       localStorage.setItem(`pulsvote_vote_${id}`, JSON.stringify(selected));
       setHasVoted(true);
       setChangingVote(false);
+      setVoteSuccess(true);
+      window.setTimeout(() => setVoteSuccess(false), 1100);
       setMessage(
         hasVoted
           ? "Your vote has been updated successfully."
@@ -5473,11 +6049,49 @@ function PublicPoll() {
     );
   const total = poll.totalVotes || 0;
   const isUnavailable = poll.status === "CLOSED" || poll.status === "EXPIRED";
-  const copy = () => {
-    copyText(window.location.href).then(() => {
-      setMessage("Poll link copied to clipboard.");
-      setShare(false);
-    });
+  const reminderChoices = [1, 6, 24].filter(
+    (hours) =>
+      poll.expiresAt &&
+      new Date(poll.expiresAt).getTime() - Date.now() > hours * 60 * 60 * 1000,
+  );
+  const saveReminder = async (hours) => {
+    setReminderBusy(true);
+    try {
+      const response = await api.put(`/polls/${id}/reminder`, {
+        hoursBefore: hours,
+      });
+      setReminder(response.data.data);
+      setMessage("Reminder set for this poll.");
+    } catch (error) {
+      setMessage(
+        error.response?.data?.error?.message || "Unable to set reminder.",
+      );
+    } finally {
+      setReminderBusy(false);
+    }
+  };
+  const cancelReminder = async () => {
+    setReminderBusy(true);
+    try {
+      await api.delete(`/polls/${id}/reminder`);
+      setReminder(null);
+      setMessage("Reminder cancelled.");
+    } catch {
+      setMessage("Unable to cancel reminder.");
+    } finally {
+      setReminderBusy(false);
+    }
+  };
+  const copy = async () => {
+    const ok = await copyText(window.location.href);
+    const nextState = { visible: true, error: !ok };
+    setCopyFeedback(nextState);
+    setMessage(ok ? "Poll link copied to clipboard." : "Unable to copy link.");
+    setShare(false);
+    window.setTimeout(
+      () => setCopyFeedback({ visible: false, error: false }),
+      1400,
+    );
   };
   const selectionLabel =
     choiceType === "SINGLE"
@@ -5510,6 +6124,14 @@ function PublicPoll() {
               <Share2 size={15} /> Share...
             </button>
           </div>
+        )}
+        {copyFeedback.visible && (
+          <span
+            className={`copy-inline-feedback ${copyFeedback.error ? "error visible" : "visible"}`}
+            aria-live="polite"
+          >
+            {copyFeedback.error ? "Copy failed" : "Link copied"}
+          </span>
         )}
       </div>
       <div className="connection-row">
@@ -5550,6 +6172,53 @@ function PublicPoll() {
               : `Voting closes ${new Date(poll.expiresAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}.`}
           </p>
         )}
+        {!isDemo &&
+          !isUnavailable &&
+          !hasVoted &&
+          localStorage.getItem("pulsvote_token") && (
+            <div className="poll-reminder" aria-label="Poll reminder">
+              <div>
+                <strong>
+                  {reminder
+                    ? "Reminder set"
+                    : "Remind me before this poll ends"}
+                </strong>
+                <small>
+                  {reminder
+                    ? `${reminder.hoursBefore} hours before expiry`
+                    : "Choose a valid lead time."}
+                </small>
+              </div>
+              {reminder ? (
+                <button
+                  type="button"
+                  className="button button-outline"
+                  disabled={reminderBusy}
+                  onClick={cancelReminder}
+                >
+                  Cancel reminder
+                </button>
+              ) : reminderChoices.length ? (
+                <select
+                  aria-label="Reminder time"
+                  disabled={reminderBusy}
+                  defaultValue=""
+                  onChange={(event) => saveReminder(Number(event.target.value))}
+                >
+                  <option value="" disabled>
+                    Set reminder
+                  </option>
+                  {reminderChoices.map((hours) => (
+                    <option key={hours} value={hours}>
+                      {hours === 24 ? "1 day" : `${hours} hours`} before
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <small>Reminder window has passed.</small>
+              )}
+            </div>
+          )}
       </div>
       <ResultAnalytics poll={poll} />
       <div className="voting-area">
@@ -5597,7 +6266,7 @@ function PublicPoll() {
           })}
         </div>
         <button
-          className="button button-red vote-button"
+          className={`button button-red vote-button ${voteSuccess ? "is-success" : ""}`}
           disabled={
             choiceType === "SINGLE"
               ? !selected.length || busy || isUnavailable
@@ -5610,11 +6279,13 @@ function PublicPoll() {
         >
           {busy
             ? "Recording vote..."
-            : choiceType === "SINGLE"
-              ? "Cast my vote"
-              : choiceType === "EXACTLY_TWO"
-                ? "Submit my 2 picks"
-                : "Submit my picks"}
+            : voteSuccess
+              ? "Vote recorded"
+              : choiceType === "SINGLE"
+                ? "Cast my vote"
+                : choiceType === "EXACTLY_TWO"
+                  ? "Submit my 2 picks"
+                  : "Submit my picks"}
           <Check size={17} />
         </button>
         {poll.allowVoteChange &&

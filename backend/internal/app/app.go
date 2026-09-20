@@ -62,6 +62,7 @@ type Poll struct {
 	Branding         Branding         `bson:"branding,omitempty" json:"branding,omitempty"`
 	ThankYou         ThankYou         `bson:"thank_you,omitempty" json:"thankYou,omitempty"`
 	Mode             string           `bson:"mode,omitempty" json:"mode,omitempty"`
+	PollType         string           `bson:"poll_type,omitempty" json:"pollType,omitempty"`
 	Questions        []SurveyQuestion `bson:"questions,omitempty" json:"questions,omitempty"`
 	CreatedAt        time.Time        `bson:"created_at" json:"createdAt"`
 	UpdatedAt        time.Time        `bson:"updated_at" json:"updatedAt"`
@@ -122,6 +123,7 @@ type App struct {
 	db        *mongo.Database
 	redis     *redis.Client
 	jwtSecret []byte
+	stopReminders context.CancelFunc
 }
 type claims struct {
 	UserID string `json:"userId"`
@@ -192,9 +194,15 @@ func New(ctx context.Context) (*gin.Engine, func(), error) {
 	protectedPolls.GET("/:id/export", a.exportCSV)
 	protectedPolls.GET("/:id/versions", a.versions)
 	protectedPolls.GET("/:id/versions/:version", a.version)
+	protectedPolls.GET("/:id/reminder", a.getReminder)
+	protectedPolls.PUT("/:id/reminder", a.setReminder)
+	protectedPolls.DELETE("/:id/reminder", a.deleteReminder)
 	protectedPolls.POST("/:id/bookmark", a.addBookmark)
 	protectedPolls.DELETE("/:id/bookmark", a.removeBookmark)
-	cleanup := func() { _ = mongoClient.Disconnect(context.Background()); _ = redisClient.Close() }
+	reminderContext, stopReminders := context.WithCancel(context.Background())
+	a.stopReminders = stopReminders
+	go a.reminderLoop(reminderContext)
+	cleanup := func() { stopReminders(); _ = mongoClient.Disconnect(context.Background()); _ = redisClient.Close() }
 	return r, cleanup, nil
 }
 
@@ -510,6 +518,7 @@ func (a *App) createPoll(c *gin.Context) {
 		Branding         Branding         `json:"branding"`
 		ThankYou         ThankYou         `json:"thankYou"`
 		Mode             string           `json:"mode"`
+		PollType         string           `json:"pollType"`
 		Questions        []SurveyQuestion `json:"questions"`
 	}
 	if !decode(c, &in) {
@@ -552,7 +561,16 @@ func (a *App) createPoll(c *gin.Context) {
 	if in.StartAt != nil && in.StartAt.After(time.Now()) {
 		status = "SCHEDULED"
 	}
-	p.ID, p.OwnerID, p.Description, p.Status, p.VotingMode, p.ChoiceType, p.MaxSelections, p.ExpiresAt, p.StartAt, p.EndAt, p.Theme, p.AllowVoteChange, p.ResponseLimit, p.AutoCloseAt, p.ResultVisibility, p.Branding, p.ThankYou, p.Mode, p.Questions, p.CreatedAt, p.UpdatedAt = uuid.NewString(), c.GetString("userId"), strings.TrimSpace(in.Description), status, in.VotingMode, choiceType, in.MaxSelections, in.ExpiresAt, in.StartAt, in.EndAt, strings.TrimSpace(in.Theme), in.AllowVoteChange, in.ResponseLimit, in.AutoCloseAt, normalizeVisibility(in.ResultVisibility), in.Branding, in.ThankYou, normalizeMode(in.Mode), in.Questions, time.Now(), time.Now()
+	pollType, err := normalizePollType(in.PollType)
+	if err != nil {
+		fail(c, 400, "VALIDATION_ERROR", err.Error())
+		return
+	}
+	if err := validatePollTypeOptions(pollType, len(p.Options)); err != nil {
+		fail(c, 400, "VALIDATION_ERROR", err.Error())
+		return
+	}
+	p.ID, p.OwnerID, p.Description, p.Status, p.VotingMode, p.ChoiceType, p.MaxSelections, p.ExpiresAt, p.StartAt, p.EndAt, p.Theme, p.AllowVoteChange, p.ResponseLimit, p.AutoCloseAt, p.ResultVisibility, p.Branding, p.ThankYou, p.Mode, p.PollType, p.Questions, p.CreatedAt, p.UpdatedAt = uuid.NewString(), c.GetString("userId"), strings.TrimSpace(in.Description), status, in.VotingMode, choiceType, in.MaxSelections, in.ExpiresAt, in.StartAt, in.EndAt, strings.TrimSpace(in.Theme), in.AllowVoteChange, in.ResponseLimit, in.AutoCloseAt, normalizeVisibility(in.ResultVisibility), in.Branding, in.ThankYou, normalizeMode(in.Mode), pollType, in.Questions, time.Now(), time.Now()
 	_, err = a.db.Collection("polls").InsertOne(c, p)
 	if err != nil {
 		fail(c, 500, "DATABASE_ERROR", "Unable to create poll")
@@ -580,6 +598,7 @@ func (a *App) updatePoll(c *gin.Context) {
 		Branding         *Branding         `json:"branding"`
 		ThankYou         *ThankYou         `json:"thankYou"`
 		Mode             *string           `json:"mode"`
+		PollType         *string           `json:"pollType"`
 		Questions        *[]SurveyQuestion `json:"questions"`
 	}
 	if !decode(c, &in) {
@@ -644,6 +663,21 @@ func (a *App) updatePoll(c *gin.Context) {
 	if in.Mode != nil {
 		mode = *in.Mode
 	}
+	pollType := current.PollType
+	if pollType == "" {
+		pollType = "NORMAL"
+	}
+	if in.PollType != nil {
+		pollType, err = normalizePollType(*in.PollType)
+		if err != nil {
+			fail(c, 400, "VALIDATION_ERROR", err.Error())
+			return
+		}
+	}
+	if err := validatePollTypeOptions(pollType, len(validated.Options)); err != nil {
+		fail(c, 400, "VALIDATION_ERROR", err.Error())
+		return
+	}
 	questions := current.Questions
 	if in.Questions != nil {
 		questions = *in.Questions
@@ -652,7 +686,7 @@ func (a *App) updatePoll(c *gin.Context) {
 		fail(c, 400, "VALIDATION_ERROR", err.Error())
 		return
 	}
-	set := bson.M{"question": validated.Question, "options": validated.Options, "updated_at": time.Now(), "choice_type": choiceType, "max_selections": maxSelections, "response_limit": responseLimit, "auto_close_at": autoCloseAt, "result_visibility": normalizeVisibility(visibility), "branding": branding, "thank_you": thankYou, "mode": normalizeMode(mode), "questions": questions}
+	set := bson.M{"question": validated.Question, "options": validated.Options, "updated_at": time.Now(), "choice_type": choiceType, "max_selections": maxSelections, "response_limit": responseLimit, "auto_close_at": autoCloseAt, "result_visibility": normalizeVisibility(visibility), "branding": branding, "thank_you": thankYou, "mode": normalizeMode(mode), "poll_type": pollType, "questions": questions}
 	unset := bson.M{}
 	if len(in.StartAt) > 0 || len(in.EndAt) > 0 {
 		var startAt, endAt *time.Time
@@ -1053,6 +1087,24 @@ func normalizeChoiceType(raw string) (string, error) {
 	default:
 		return "", errors.New("choiceType must be SINGLE or MULTIPLE")
 	}
+}
+func normalizePollType(raw string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "", "NORMAL", "POLL":
+		return "NORMAL", nil
+	case "RATING":
+		return "RATING", nil
+	case "EMOJI":
+		return "EMOJI", nil
+	default:
+		return "", errors.New("pollType must be NORMAL, RATING, or EMOJI")
+	}
+}
+func validatePollTypeOptions(pollType string, optionCount int) error {
+	if pollType == "RATING" && optionCount != 5 {
+		return errors.New("rating polls must have five options")
+	}
+	return nil
 }
 func validateChoiceTypeSettings(choiceType string, maxSelections int) error {
 	switch strings.ToUpper(choiceType) {
